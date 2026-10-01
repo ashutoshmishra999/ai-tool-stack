@@ -13,8 +13,34 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 /* --- tiny static server --- */
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+/* Mock of the Vercel functions so the browser flow can be tested end-to-end offline.
+ * /api/search answers after MOCK_SEARCH_MS with 6 tiered tools; /api/lead records posts. */
+const MOCK_SEARCH_MS = 1200;
+const SLOW_SEARCH_MS = 8000;   // > the 5 s client cap
+let slowMode = false;
+const leads = [];
+let searchCalls = 0;
+const MOCK_TOOLS = ["Jasper", "Writer", "Surfer SEO", "Lately", "Copy.ai", "Letterdrop"].map((name, i) => ({
+  name, url: `https://${name.toLowerCase().replace(/\W/g, "")}.example.com`, tier: ["mainstream", "mainstream", "power-user", "power-user", "niche", "niche"][i],
+  what: `${name} does a thing`, why: `fits a marketer scaling content`, company: `${name} · est. 2019 · funded`, pricing: "from $20/mo", fit: 95 - i,
+}));
 const server = http.createServer((req, res) => {
   const clean = req.url.split("?")[0].split("#")[0];
+  if (clean.startsWith("/api/")) {
+    let raw = ""; req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      let body = {}; try { body = JSON.parse(raw || "{}"); } catch (_) {}
+      if (clean === "/api/lead") { leads.push(body); res.writeHead(200, { "Content-Type": "application/json" }); return res.end('{"ok":true}'); }
+      if (clean === "/api/search") {
+        searchCalls++;
+        const excl = new Set((body.exclude || []).map((n) => String(n).toLowerCase()));
+        const tools = MOCK_TOOLS.filter((t) => !excl.has(t.name.toLowerCase()));
+        return setTimeout(() => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ text: JSON.stringify({ query: body.query || "", tools, insight: "You could ship 3× the content." }), sources: [{ title: "G2", url: "https://g2.com" }], provider: "grok", ms: MOCK_SEARCH_MS })); }, slowMode ? SLOW_SEARCH_MS : MOCK_SEARCH_MS);
+      }
+      res.writeHead(404); res.end();
+    });
+    return;
+  }
   const p = path.join(ROOT, clean === "/" ? "index.html" : clean);
   fs.readFile(p, (err, buf) => { if (err) { res.writeHead(404); res.end(); return; } res.writeHead(200, { "Content-Type": MIME[path.extname(p)] || "text/plain" }); res.end(buf); });
 });
@@ -70,6 +96,8 @@ if (require.main !== module) return;
   const cdp = await connectWs(page.webSocketDebuggerUrl);
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
+  /* Pretend we're deployed: point the AI proxy + lead endpoint at the mock server above. */
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `window.LOADOUT_AI = { provider: "proxy", url: "/api/search" }; window.LOADOUT_LEAD_ENDPOINT = "/api/lead";` });
   const evalJs = async (expr) => { const r = await cdp.send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }); if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || "eval error"); return r.result.result.value; };
   const click = (sel) => evalJs(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return "missing"; el.click(); return "ok"; })()`);
   const screen = () => evalJs("document.body.dataset.screen || 'landing'");
@@ -114,6 +142,29 @@ if (require.main !== module) return;
     check((await evalJs("!!document.querySelector('.opt[data-id=\"content_volume\"]')")) === true, "focus options are marketing-specific");
     check((await evalJs("!!document.querySelector('.opt[data-id=\"code_faster\"]')")) === false, "engineering focus options NOT shown to a marketer");
     await click('.opt[data-id="visuals_fast"]'); await sleep(550);
+    /* Contact capture right after focus — the live search has started */
+    check((await screen()) === "capture", "contact capture shown right after the focus question");
+    check((await step()) === "4 / 12", "capture does not advance the question counter");
+    check((await evalJs("document.querySelector('#bottombar').hidden")) === true, "sticky bar hidden on capture (has its own CTA)");
+    check((await evalJs("document.querySelector('.contact-live').textContent")).includes("LIVE SEARCH STARTED"), "capture says live search started");
+    check((await evalJs("document.querySelector('.query-box code').textContent")).toLowerCase().includes("marketing"), "capture shows the search query with the role");
+    check((await evalJs("document.querySelector('.query-box code').textContent")).toLowerCase().includes("creatives"), "search query includes the focus");
+    check((await evalJs("document.querySelector('#capture-root').textContent")).includes("Ashutosh"), "capture greets by name");
+    check(searchCalls === 1, "early search was fired at the focus step");
+    /* Validation: bad email blocks, bad phone blocks, valid continues */
+    await evalJs(`document.querySelector('#cap-email').value='nope'; document.querySelector('#capture-form').requestSubmit();`); await sleep(80);
+    check((await screen()) === "capture" && (await evalJs("!!document.querySelector('#cap-email.is-invalid')")), "capture rejects invalid email");
+    await evalJs(`document.querySelector('#cap-email').value='ashutosh@example.com'; document.querySelector('#cap-phone').value='123'; document.querySelector('#capture-form').requestSubmit();`); await sleep(80);
+    check((await screen()) === "capture" && (await evalJs("!!document.querySelector('#cap-phone.is-invalid')")), "capture rejects short phone");
+    await evalJs(`document.querySelector('#cap-phone').value='9876543210'; document.querySelector('#capture-form').requestSubmit();`); await sleep(250);
+    check((await screen()) === "quiz" && (await step()) === "5 / 12", "capture → Q5 after valid contact");
+    check(leads.length === 1 && leads[0].email === "ashutosh@example.com" && leads[0].phone === "+919876543210" && leads[0].stage === "focus", "lead POSTed to /api/lead with stage=focus");
+    check(typeof leads[0].searchQuery === "string" && leads[0].searchQuery.length > 10, "lead includes the search query");
+    /* Back from Q5 returns to capture with values preserved */
+    await click("#top-back"); await sleep(100);
+    check((await screen()) === "capture" && (await evalJs("document.querySelector('#cap-email').value")) === "ashutosh@example.com", "back → capture keeps the email");
+    await click('[data-action="skip-capture"]'); await sleep(100);
+    check((await screen()) === "quiz" && (await step()) === "5 / 12", "skip-capture continues to Q5");
     /* Q5 goals → dynamic fact */
     for (const id of ["save_time", "better_content"]) await click(`.opt[data-id="${id}"]`);
     await click("#q-continue"); await sleep(150);
@@ -165,13 +216,12 @@ if (require.main !== module) return;
     check((await evalJs("document.querySelectorAll('.preview-item.is-locked').length")) >= 2, "preview has locked items");
     check((await evalJs("document.querySelectorAll('.preview-item:not(.is-locked)').length")) === 3, "preview reveals exactly 3");
 
-    /* Invalid email is rejected */
-    await evalJs(`document.querySelector('#email').value = 'nope'; document.querySelector('#email-form').requestSubmit();`);
-    await sleep(100);
-    check((await screen()) === "preview", "invalid email blocked");
-    await evalJs(`document.querySelector('#email').value = 'ashutosh@example.com'; document.querySelector('#email-form').requestSubmit();`);
-    await sleep(200);
-    check((await screen()) === "result", "result screen shown after email");
+    /* Contact already captured mid-quiz → preview shows the "heading to your inbox" card, no email gate */
+    check((await evalJs("!!document.querySelector('#email-form')")) === false, "preview has no second email gate when contact was captured");
+    check((await evalJs("document.querySelector('.capture-ready').textContent")).includes("WhatsApp"), "preview acknowledges inbox + WhatsApp delivery");
+    check((await evalJs("document.querySelector('.capture-ready').textContent")).includes("just came back"), "preview knows the early search already finished");
+    await click('.capture-ready [data-action="skip-email"]'); await sleep(250);
+    check((await screen()) === "result", "result screen shown after reveal");
 
     const toolCount = await evalJs("document.querySelectorAll('.tool-card').length");
     check(toolCount >= 5 && toolCount <= 8, `result has ${toolCount} tool cards`);
@@ -179,32 +229,31 @@ if (require.main !== module) return;
     check((await evalJs("document.querySelectorAll('.workflow').length")) >= 1, "workflows rendered");
     check((await evalJs("document.querySelectorAll('.gap').length")) >= 1, "gaps rendered");
     check((await evalJs("document.querySelectorAll('.path li').length")) >= 2, "learning path rendered");
-    check((await evalJs("!!document.querySelector('#phone-form')")) === true, "WhatsApp capture shown after email");
+    check((await evalJs("!!document.querySelector('#phone-form')")) === false, "no WhatsApp re-ask when phone already given");
     check((await evalJs("[...document.querySelectorAll('.pill.is-owned')].map(p=>p.textContent).join()")).includes("ChatGPT"), "owned ChatGPT shown in layers as 'you use this'");
     check((await evalJs("[...document.querySelectorAll('.tool-card h4')].map(h=>h.textContent).includes('ChatGPT')")) === false, "owned ChatGPT NOT recommended");
     check((await evalJs("!!document.querySelector('#ai-block')")) === true, "AI deep search block rendered");
-    check((await evalJs("!!document.querySelector('#ai-setup-form')")) === true, "AI block shows setup form when no provider configured");
     check((await evalJs("document.querySelector('#ai-block').textContent")).includes("Creatives"), "AI block references the focus answer");
     check((await evalJs("document.querySelector('.profile-grid').textContent")).includes("Creatives"), "result profile shows focus");
-    /* Configure a bogus proxy → graceful error state, not a crash */
-    const searching = await evalJs(`document.querySelector('#ai-provider').value='proxy'; document.querySelector('#ai-provider').dispatchEvent(new Event('change')); document.querySelector('#ai-url').value='http://127.0.0.1:1/nope'; document.querySelector('#ai-setup-form').requestSubmit(); !!document.querySelector('#ai-body .ai-status')`);
-    check(searching === true, "AI block shows searching state");
-    await sleep(900);
-    check((await evalJs("document.querySelector('#ai-body').textContent")).includes("didn't come back"), "AI failure renders graceful error");
-    check((await evalJs("JSON.parse(localStorage.getItem('loadout.ai')).provider")) === "proxy", "AI config persisted");
-    await click('[data-action="ai-settings"]'); await sleep(50);
-    check((await evalJs("!!document.querySelector('#ai-setup-form')")) === true, "change provider returns to setup");
+    /* Early search landed during the quiz → results render instantly, no extra network call */
+    check((await evalJs("document.querySelectorAll('#ai-body .ai-card').length")) === 6, "AI block shows 6 live tools immediately");
+    check(searchCalls === 1, "result page reused the early search (no second call)");
+    check((await evalJs("document.querySelectorAll('#ai-body .ai-card.tier-niche').length")) === 2 && (await evalJs("document.querySelectorAll('#ai-body .ai-card.tier-power-user').length")) === 2, "tier mix: 2 niche + 2 power-user");
+    check((await evalJs("document.querySelector('#ai-body .ai-card').classList.contains('tier-niche')")) === true, "niche finds are listed first");
+    check((await evalJs("document.querySelector('#ai-body .ai-card .company').textContent")).includes("est. 2019"), "AI card shows company / established info");
+    check((await evalJs("document.querySelector('#ai-body .query-box code').textContent")).toLowerCase().includes("marketing"), "AI block shows the search query used");
+    check((await evalJs("document.querySelector('#ai-body .fineprint').textContent")).includes("Grok"), "AI block credits the winning provider");
+    check((await evalJs("!!document.querySelector('#ai-body [data-action=\"ai-settings\"]')")) === false, "no 'change provider' UI when the provider is fixed by config");
+    /* Search again → forces a fresh call and re-renders */
+    await click('[data-action="ai-refresh"]'); await sleep(60);
+    check((await evalJs("!!document.querySelector('#ai-body .ai-status')")) === true, "refresh shows searching state");
+    await sleep(MOCK_SEARCH_MS + 400);
+    check((await evalJs("document.querySelectorAll('#ai-body .ai-card').length")) === 6 && searchCalls === 2, "refresh fetched again and re-rendered");
     check((await evalJs("document.querySelector('[data-share=\"whatsapp\"]').href")).startsWith("https://wa.me/"), "WhatsApp share link built");
     check((await evalJs("document.querySelector('.result-head .eyebrow').textContent")).includes("Ashutosh"), "result greets by name");
 
-    /* Phone validation */
-    await evalJs(`document.querySelector('#phone').value = '12345'; document.querySelector('#phone-form').requestSubmit();`);
-    check((await evalJs("!!document.querySelector('#phone.is-invalid')")) === true, "short phone flagged invalid");
-    await evalJs(`document.querySelector('#phone').value = '9876543210'; document.querySelector('#phone-form').requestSubmit();`);
-    check((await evalJs("!!document.querySelector('.capture-done')")) === true, "valid phone accepted");
-
     /* Lead persisted locally */
-    const saved = JSON.parse(await evalJs("localStorage.getItem('loadout.v2')"));
+    const saved = JSON.parse(await evalJs("localStorage.getItem('loadout.v3')"));
     check(saved && saved.email === "ashutosh@example.com" && saved.phone === "+919876543210", "lead saved to localStorage");
 
     /* Share link round-trip */
@@ -233,6 +282,31 @@ if (require.main !== module) return;
     check((await evalJs("document.documentElement.scrollWidth <= 376")) === true, "no horizontal overflow at 375px on fact screen");
     await click("#q-continue"); await sleep(100); await click('.opt[data-id="video"]'); await click("#q-continue"); await sleep(100);
     check((await evalJs("!!document.querySelector('.opt[data-id=\"video_edit\"]')")) === true, "focus options switch to creator-specific after role change");
+    await click('.opt[data-id="video_edit"]'); await sleep(550);
+    check((await screen()) === "capture", "capture shown on mobile flow too");
+    check((await evalJs("document.documentElement.scrollWidth <= 376")) === true, "no horizontal overflow at 375px on capture screen");
+    check((await evalJs("document.querySelector('.query-box code').textContent")).toLowerCase().includes("creator"), "creator's search query reflects the new role");
+
+    /* Slow-search path: result page must not hang past the 5 s cap, then fill in when the search lands. */
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {});
+    await evalJs("localStorage.removeItem('loadout.ai.cache')");
+    slowMode = true;
+    /* Different focus ⇒ different cache key ⇒ no early result to reuse; the result page must do a fresh (slow) call. */
+    await evalJs(`window.Loadout.state.email='x@y.co'; window.Loadout.state.ai=null; window.Loadout.state.profile = Object.assign(window.Loadout.state.profile, { focus: 'scripts', tasks:['video'], goals:['save_time'], useCases:['video'], maturity:2, aiTools:['none'], ecosystem:['google'], tech:3, prefs:['easy'], invest:'B', budget:'b1' });`);
+    await evalJs(`window.Loadout.debug.finish()`); await sleep(4200);
+    /* The early search from the mobile flow (video_edit) may have landed meanwhile — drop it so this is a true cold path. */
+    await evalJs(`window.Loadout.state.ai = null; window.Loadout.state.aiKey = null; localStorage.removeItem('loadout.ai.cache');`);
+    const callsBefore = searchCalls;
+    await evalJs(`document.querySelector('.capture-ready [data-action="skip-email"]')?.click()`); await sleep(100);
+    check((await screen()) === "result", "slow path reaches result");
+    check(searchCalls === callsBefore + 1, "cold result page triggers exactly one fresh search");
+    check((await evalJs("!!document.querySelector('#ai-body .ai-status')")) === true, "AI block in searching state while slow search runs");
+    await sleep(5400);
+    check((await evalJs("document.querySelector('#ai-body').textContent")).includes("taking a little longer"), "after 5 s cap the block shows the 'taking longer' message instead of hanging");
+    check((await evalJs("document.querySelector('#ai-body').textContent")).includes("x@y.co"), "pending message reassures results go to the captured email");
+    await sleep(SLOW_SEARCH_MS - 5400 + 800);
+    check((await evalJs("document.querySelectorAll('#ai-body .ai-card').length")) === 6, "late-arriving search still fills in the cards");
+    slowMode = false;
 
     const ex = exceptions();
     check(ex.length === 0, `no JS exceptions during flow ${ex[0] || ""}`);

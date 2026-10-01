@@ -11,18 +11,22 @@
   /* ------------------------------------------------------------------ */
   /* Config                                                              */
   /* ------------------------------------------------------------------ */
+  const isLocal = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname) || window.location.protocol === "file:";
   const CONFIG = {
-    /* POST JSON {firstName,email,phone,profile,stackIds} here. Leave null to only store locally. */
-    LEAD_ENDPOINT: null,
+    /* POST JSON {firstName,email,phone,stage,profile,stackIds,searchQuery} here. Auto-wired to /api/lead when deployed. */
+    LEAD_ENDPOINT: window.LOADOUT_LEAD_ENDPOINT !== undefined ? window.LOADOUT_LEAD_ENDPOINT : (isLocal ? null : "/api/lead"),
     LEARN_CTA_URL: "#learn",
-    STORAGE_KEY: "loadout.v2",
+    STORAGE_KEY: "loadout.v3",
     AUTO_ADVANCE_MS: 420,
+    /* The contact step is placed right after this question — the moment we start the live search for them. */
+    CAPTURE_AFTER: "focus",
   };
 
-  /* Flow = questions interleaved with fact interstitials. */
+  /* Flow = questions interleaved with fact interstitials + one contact step. */
   const FLOW = [];
   Q.forEach((q) => {
     FLOW.push({ kind: "q", q });
+    if (q.id === CONFIG.CAPTURE_AFTER) FLOW.push({ kind: "capture" });
     const f = D.FACTS.find((x) => x.after === q.id);
     if (f) FLOW.push({ kind: "fact", fact: f });
   });
@@ -42,6 +46,7 @@
     startedAt: null,
     shared: false,
     ai: null,               // deep search result
+    aiKey: null,            // profile key the early search was run for
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -82,11 +87,11 @@
   function show(screen) {
     state.screen = screen;
     $$(".screen").forEach((s) => s.classList.toggle("is-active", s.dataset.screen === screen));
-    const inFlow = screen === "quiz" || screen === "fact";
+    const inFlow = screen === "quiz" || screen === "fact" || screen === "capture";
     $("#progress").hidden = !inFlow;
     $("#step-count").hidden = !inFlow;
     $("#top-back").hidden = !(inFlow || screen === "name");
-    $("#bottombar").hidden = !inFlow;
+    $("#bottombar").hidden = !(screen === "quiz" || screen === "fact");
     document.body.dataset.screen = screen;
     window.scrollTo(0, 0);
   }
@@ -114,6 +119,7 @@
     const step = FLOW[state.pos];
     updateProgress();
     if (step.kind === "fact") { renderFact(step.fact); show("fact"); $("#q-continue").disabled = false; $("#q-continue").textContent = "CONTINUE"; return; }
+    if (step.kind === "capture") { renderCapture(); show("capture"); return; }
     renderQuestion(step.q);
     show("quiz");
   }
@@ -300,6 +306,55 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Contact capture — framed as "where do we send the search results?"  */
+  /* ------------------------------------------------------------------ */
+  const hasContact = () => !!(state.email || state.phone);
+
+  function renderCapture() {
+    const p = state.profile;
+    const role = byId(D.ROLES, p.role) || {};
+    const focus = D.ALL_FOCUS.find((f) => f.id === p.focus) || {};
+    const query = AI.buildQuery(p);
+    const searching = AI.isConfigured();
+    const root = $("#capture-root");
+    root.innerHTML = `
+      <div class="contact-card">
+        <div class="contact-live">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>${searching ? "LIVE SEARCH STARTED" : "SEARCH QUEUED"}</span>
+        </div>
+        <span class="big-emoji" aria-hidden="true">${focus.emoji || role.emoji || "🔭"}</span>
+        <h2 class="h-xl">${esc(p.firstName ? `${p.firstName}, we're on it.` : "We're on it.")}</h2>
+        <p class="hint">We've started a live web search for <strong>${esc(focus.label || "your goal")}</strong> tools built for ${esc((role.label || "your role").toLowerCase())} work — the kind of niche picks most people haven't heard of.</p>
+        <div class="query-box" aria-label="Search query"><span>🔎</span><code>${esc(query)}</code></div>
+        <p class="contact-ask">It'll take a bit to finish. Where should we send the results — plus your full stack, workflows and learning path?</p>
+        <form class="contact-form" id="capture-form" novalidate>
+          <label class="field"><span class="sr-only">Email</span><input id="cap-email" type="email" autocomplete="email" inputmode="email" placeholder="you@email.com" value="${esc(state.email || "")}" required /></label>
+          <label class="field phone-field"><span class="prefix">🇮🇳 +91</span><span class="sr-only">WhatsApp number</span><input id="cap-phone" type="tel" inputmode="numeric" autocomplete="tel-national" placeholder="WhatsApp number (optional)" maxlength="10" value="${esc((state.phone || "").replace(/^\+91/, ""))}" /></label>
+          <button class="btn btn-primary btn-lg" type="submit">SEND IT HERE &amp; CONTINUE <span aria-hidden="true">→</span></button>
+          <p class="fineprint">Only used to deliver your stack. No spam, no selling your data — unsubscribe in one tap.</p>
+          <button class="link-btn" type="button" data-action="skip-capture">Continue without saving my results</button>
+        </form>
+      </div>`;
+    const form = $("#capture-form", root);
+    const email = $("#cap-email", form), phone = $("#cap-phone", form);
+    [email, phone].forEach((i) => i.addEventListener("input", () => i.classList.remove("is-invalid")));
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const ev = email.value.trim(), pv = phone.value.replace(/\D/g, "");
+      let bad = false;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(ev)) { email.classList.add("is-invalid"); bad = true; }
+      if (pv && pv.length !== 10) { phone.classList.add("is-invalid"); bad = true; }
+      if (bad) { (email.classList.contains("is-invalid") ? email : phone).focus(); return; }
+      state.email = ev; state.phone = pv ? "+91" + pv : "";
+      submitLead("focus");
+      track("contact_captured", { stage: "focus", phone: !!pv });
+      next();
+    });
+    window.setTimeout(() => { if (!email.value) email.focus(); }, 60);
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Navigation                                                          */
   /* ------------------------------------------------------------------ */
   function next() {
@@ -307,9 +362,20 @@
     if (step.kind === "q") {
       if (!isAnswered(step.q)) return;
       track("question_answered", { step: qNumber(state.pos), id: step.q.id });
-    } else track("fact_viewed", { after: step.fact.after });
+      /* The moment the focus is known we start the live web search in the background. */
+      if (step.q.id === CONFIG.CAPTURE_AFTER) startEarlySearch();
+    } else if (step.kind === "fact") track("fact_viewed", { after: step.fact.after });
     if (state.pos < FLOW.length - 1) { state.pos++; renderStep(); }
     else finishQuiz();
+  }
+  function startEarlySearch() {
+    if (!AI.isConfigured()) return;
+    const p = AI.startEarly(state.profile, E.earlyExclude ? E.earlyExclude(state.profile) : []);
+    if (p) {
+      const key = AI.cacheKey(state.profile);
+      track("ai_search_started", { stage: "early", provider: AI.getConfig().provider, query: AI.buildQuery(state.profile) });
+      p.then((res) => { if (res && res.ok) { state.ai = res; state.aiKey = key; } });
+    }
   }
   function back() {
     if (state.screen === "name") { show("landing"); return; }
@@ -325,12 +391,13 @@
   function finishQuiz() {
     track("quiz_completed", { ms: Date.now() - (state.startedAt || Date.now()) });
     state.result = E.recommend(state.profile);
-    state.ai = null;
+    /* Keep the early search result if it's for this same profile; otherwise forget it. */
+    if (state.ai && state.ai.ok && state.aiKey !== AI.cacheKey(state.profile)) state.ai = null;
     show("analyzing");
     const name = state.profile.firstName;
     $("#analyzing-title").textContent = name ? `Building your stack, ${name}…` : "Building your stack…";
     const s = state.result.summary;
-    $("#analyzing-fact").innerHTML = `<span class="fact-emoji" aria-hidden="true">${s.focusEmoji}</span><h3 class="fact-title">Deep-searching for: ${esc(s.focusLabel || "your biggest opportunity")}</h3><p class="fact-body">We'll ask a web-grounded AI for tools built for exactly this once your stack is ready.</p>`;
+    $("#analyzing-fact").innerHTML = `<span class="fact-emoji" aria-hidden="true">${s.focusEmoji}</span><h3 class="fact-title">${state.ai && state.ai.ok ? "Live search done" : "Live search running"}: ${esc(s.focusLabel || "your biggest opportunity")}</h3><p class="fact-body">${state.ai && state.ai.ok ? `${state.ai.tools.length} tools found — including a few you probably haven't heard of.` : "A web-grounded AI is finding specialist tools for exactly this, right now."}</p>`;
 
     const total = 3400, start = performance.now();
     const fg = $("#ring-fg"), pct = $("#ring-pct"), status = $("#analyzing-status");
@@ -387,17 +454,24 @@
         }).join("")}
       </ol>
 
+      ${hasContact() ? `
+      <div class="capture capture-ready">
+        <h3>📬 ${esc(state.phone ? "Heading to your inbox + WhatsApp." : "Heading to your inbox.")}</h3>
+        <p>${s.toolCount} tools, ${s.workflowCount} workflows, your learning roadmap — and the live search for "${esc(s.focusLabel || "your focus")}" ${state.ai && state.ai.ok ? "just came back" : "is wrapping up"}.</p>
+        <button class="btn btn-primary btn-lg" type="button" data-action="skip-email">REVEAL MY FULL STACK →</button>
+      </div>` : `
       <form class="capture" id="email-form" novalidate>
         <h3>📬 Where should we send your full stack?</h3>
-        <p>${s.toolCount} tools, ${s.workflowCount} workflows, your learning roadmap — plus a live AI deep search for "${esc(s.focusLabel || "your focus")}".</p>
+        <p>${s.toolCount} tools, ${s.workflowCount} workflows, your learning roadmap — plus the live AI deep search for "${esc(s.focusLabel || "your focus")}".</p>
         <div class="capture-row">
           <input id="email" name="email" type="email" autocomplete="email" placeholder="you@email.com" required value="${esc(state.email || "")}" />
           <button class="btn btn-primary" type="submit">UNLOCK MY STACK →</button>
         </div>
         <p class="fineprint">No spam. Just your personalised stack and the occasional useful AI resource.</p>
         <button class="link-btn" type="button" data-action="skip-email">Just show me the result</button>
-      </form>`;
+      </form>`}`;
 
+    if (hasContact()) return;
     $("#email-form").addEventListener("submit", (e) => {
       e.preventDefault();
       const input = $("#email");
@@ -411,16 +485,20 @@
     $("#email").addEventListener("input", (e) => e.target.classList.remove("is-invalid"));
   }
 
-  async function submitLead(kind) {
+  /* stage: "focus" (mid-quiz) | "email" (preview gate) | "phone" (result page WhatsApp) */
+  async function submitLead(stage) {
     save();
-    track(kind === "email" ? "lead_captured" : "whatsapp_captured", { role: state.profile.role });
+    track(stage === "phone" ? "whatsapp_captured" : "lead_captured", { stage, role: state.profile.role, hasPhone: !!state.phone });
     if (!CONFIG.LEAD_ENDPOINT) return;
+    const payload = JSON.stringify({
+      firstName: state.profile.firstName, email: state.email, phone: state.phone, stage,
+      profile: state.profile, stackIds: state.result ? state.result.stack.map((s) => s.tool.id) : [],
+      searchQuery: state.profile.focus ? AI.buildQuery(state.profile) : "", ts: Date.now(),
+    });
     try {
-      await fetch(CONFIG.LEAD_ENDPOINT, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firstName: state.profile.firstName, email: state.email, phone: state.phone, profile: state.profile, stackIds: state.result.stack.map((s) => s.tool.id), ts: Date.now() }),
-      });
-    } catch (_) { /* never block the result on a network error */ }
+      if (navigator.sendBeacon && navigator.sendBeacon(CONFIG.LEAD_ENDPOINT, new Blob([payload], { type: "application/json" }))) return;
+      await fetch(CONFIG.LEAD_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: payload, keepalive: true });
+    } catch (_) { /* never block the flow on a network error */ }
   }
   /* ------------------------------------------------------------------ */
   /* Result                                                              */
@@ -472,7 +550,7 @@
       </section>
 
       <section class="block block-ai" id="ai-block">
-        <div class="block-head"><p class="eyebrow">🔭 AI deep search</p><h3>Live web search for "${esc(s.focusLabel || "your focus")}"</h3></div>
+        <div class="block-head"><p class="eyebrow">🔭 AI deep search · live</p><h3>Tools the web says are built for "${esc(s.focusLabel || "your focus")}" in ${esc(s.roleLabel.toLowerCase())}</h3></div>
         <div id="ai-body"></div>
       </section>
 
@@ -585,51 +663,76 @@
   /* ------------------------------------------------------------------ */
   /* AI deep search block                                                */
   /* ------------------------------------------------------------------ */
-  function renderAI() {
+  function aiCtx() {
+    const r = state.result;
+    const exclude = [...r.stack.map((x) => x.tool.name), ...r.layers.flatMap((L) => L.tools.filter((t) => t.owned).map((t) => t.tool.name))];
+    return { profile: state.profile, exclude, summary: r.summary };
+  }
+
+  function renderAI(opts = {}) {
     const body = $("#ai-body");
     if (!body) return;
     if (!AI.isConfigured()) { renderAISetup(body); return; }
-    if (state.ai && state.ai.ok) { renderAIResult(body, state.ai); return; }
-    body.innerHTML = `<div class="ai-status"><span class="ai-dots"><span></span><span></span><span></span></span> Searching the web for tools built for your focus…</div>`;
+    if (state.ai && state.ai.ok && !opts.force) { renderAIResult(body, state.ai); return; }
+    const query = AI.buildQuery(state.profile);
+    body.innerHTML = `<div class="ai-status"><span class="ai-dots"><span></span><span></span><span></span></span> <span>Finishing the live search…</span></div><div class="query-box query-box-light"><span>🔎</span><code>${esc(query)}</code></div>`;
     const provider = AI.getConfig().provider;
-    track("ai_search_started", { provider });
-    AI.deepSearch(state.result).then((res) => {
+    track("ai_search_awaited", { provider });
+    AI.deepSearch(aiCtx(), { force: !!opts.force }).then((res) => {
       if (state.screen !== "result" || !$("#ai-body")) return;
       state.ai = res;
-      if (res.ok) { track("ai_search_completed", { provider, cached: !!res.cached, tools: res.tools.map((t) => t.name) }); renderAIResult($("#ai-body"), res); }
-      else { track("ai_search_failed", { provider, error: res.error }); renderAIError($("#ai-body"), res.error); }
+      if (res.ok) { track("ai_search_completed", { provider: res.provider || provider, cached: !!res.cached, ms: res.ms, tools: res.tools.map((t) => t.name) }); renderAIResult($("#ai-body"), res); }
+      else { track("ai_search_failed", { provider, error: res.error }); renderAIError($("#ai-body"), res); }
     });
   }
 
+  /* The provider switcher is a dev affordance: only when the config came from the on-page form. */
+  const canSwitchProvider = () => { const c = AI.getConfig(); return !(window.LOADOUT_AI && window.LOADOUT_AI.provider) && !c.auto; };
+  const TIER_META = { mainstream: ["⭐", "Mainstream"], "power-user": ["⚡", "Power-user pick"], niche: ["💎", "Niche find"] };
+  const PROVIDER_NAME = { grok: "Grok live web search", gemini: "Gemini with Google Search grounding", claude: "Claude web search", proxy: "our search backend" };
   function renderAIResult(body, res) {
+    const order = { niche: 0, "power-user": 1, mainstream: 2 };
+    const tools = res.tools.slice().sort((a, b) => (order[a.tier] ?? 3) - (order[b.tier] ?? 3) || b.fit - a.fit);
     body.innerHTML = `
+      ${res.query ? `<div class="query-box query-box-light"><span>🔎</span><code>${esc(res.query)}</code></div>` : ""}
       ${res.insight ? `<p class="ai-insight">💡 ${esc(res.insight)}</p>` : ""}
       <div class="ai-grid">
-        ${res.tools.map((t, i) => `
-          <article class="ai-card" style="--i:${i}">
+        ${tools.map((t, i) => { const [ico, lbl] = TIER_META[t.tier] || TIER_META.niche; return `
+          <article class="ai-card tier-${esc(t.tier)}" style="--i:${i}">
+            <span class="tier">${ico} ${lbl}</span>
             <h4>${esc(t.name)} <span class="fit">FIT ${t.fit}%</span></h4>
             <p class="what">${esc(t.what)}</p>
             <p class="why">→ ${esc(t.why)}</p>
-            <div class="meta"><span>${esc(t.pricing || "Pricing varies")}</span>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener" data-track="ai_tool_clicked">Open ↗</a>` : ""}</div>
-          </article>`).join("")}
+            ${t.company ? `<p class="company">🏢 ${esc(t.company)}</p>` : ""}
+            <div class="meta"><span>${esc(t.pricing || "Pricing varies")}</span>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener" data-track="ai_tool_clicked" data-tool="${esc(t.name)}">Open ↗</a>` : ""}</div>
+          </article>`; }).join("")}
       </div>
       ${res.sources && res.sources.length ? `<div class="ai-sources">${res.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || hostOf(s.url))}</a>`).join("")}</div>` : ""}
-      <p class="fineprint">Found live via ${esc(res.provider === "claude" ? "Claude web search" : res.provider === "gemini" ? "Gemini with Google Search grounding" : "your search backend")}${res.cached ? " · cached" : ""}. Always check pricing on the tool's site. <button class="link-btn" type="button" data-action="ai-refresh">Search again</button> · <button class="link-btn" type="button" data-action="ai-settings">Change provider</button></p>`;
+      <p class="fineprint">Found live via ${esc(PROVIDER_NAME[res.provider] || "live web search")}${res.ms ? ` in ${(res.ms / 1000).toFixed(1)}s` : ""}${res.cached ? " · cached" : ""}. Established companies only — still, check pricing on the tool's site. <button class="link-btn" type="button" data-action="ai-refresh">Search again</button>${canSwitchProvider() ? ` · <button class="link-btn" type="button" data-action="ai-settings">Change provider</button>` : ""}</p>`;
   }
   function hostOf(u) { try { return new URL(u).hostname; } catch (_) { return u; } }
 
-  function renderAIError(body, err) {
+  function renderAIError(body, res) {
+    const err = (res && res.error) || "failed";
+    if (err === "timeout" && res.pending) {
+      /* Still running server-side — keep listening, and reassure: it'll also go out by email. */
+      body.innerHTML = `<p>⏳ The live search is taking a little longer than usual. ${state.email ? `It'll be in the stack we send to <strong>${esc(state.email)}</strong> — and it'll appear here the moment it lands.` : "It'll appear here the moment it lands."}</p>
+        <div class="share-actions"><button class="btn" type="button" data-action="ai-refresh">Search again</button></div>`;
+      res.pending.then((r) => { if (state.screen === "result" && $("#ai-body") && r && r.ok) { state.ai = r; renderAIResult($("#ai-body"), r); } });
+      return;
+    }
     body.innerHTML = `<p>😬 The deep search didn't come back (${esc(String(err).slice(0, 120))}).</p>
-      <div class="share-actions"><button class="btn" type="button" data-action="ai-refresh">Try again</button><button class="btn btn-ghost" type="button" data-action="ai-settings" style="color:#fff">Change provider</button></div>`;
+      <div class="share-actions"><button class="btn" type="button" data-action="ai-refresh">Try again</button>${canSwitchProvider() ? `<button class="btn btn-ghost" type="button" data-action="ai-settings" style="color:#fff">Change provider</button>` : ""}</div>`;
   }
   function renderAISetup(body) {
     const cfg = AI.getConfig();
     body.innerHTML = `
-      <p>Plug in Gemini or Claude and we'll run one live, web-grounded search for 3 more tools built specifically for <strong>${esc(state.result.summary.focusLabel || "your focus")}</strong> as a ${esc(state.result.summary.roleLabel.toLowerCase())} — excluding everything above.</p>
+      <p>Plug in Gemini, Grok or Claude and we'll run one live, web-grounded search for 6 more tools built specifically for <strong>${esc(state.result.summary.focusLabel || "your focus")}</strong> as a ${esc(state.result.summary.roleLabel.toLowerCase())} — excluding everything above.</p>
       <form class="ai-setup" id="ai-setup-form">
         <div class="row">
           <select id="ai-provider" aria-label="Provider">
             <option value="gemini" ${cfg.provider === "gemini" ? "selected" : ""}>Gemini (Google Search grounding)</option>
+            <option value="grok" ${cfg.provider === "grok" ? "selected" : ""}>Grok (xAI web search)</option>
             <option value="claude" ${cfg.provider === "claude" ? "selected" : ""}>Claude (web search)</option>
             <option value="proxy" ${cfg.provider === "proxy" ? "selected" : ""}>My own backend (proxy URL)</option>
           </select>
@@ -689,7 +792,8 @@
       case "next": next(); break;
       case "skip-email": track("email_skipped"); showResult(); break;
       case "restart": e.preventDefault(); restart(); break;
-      case "ai-refresh": state.ai = null; AI.deepSearch(state.result, { force: true }).then((res) => { state.ai = res; if ($("#ai-body")) (res.ok ? renderAIResult($("#ai-body"), res) : renderAIError($("#ai-body"), res.error)); }); $("#ai-body").innerHTML = `<div class="ai-status"><span class="ai-dots"><span></span><span></span><span></span></span> Searching again…</div>`; break;
+      case "skip-capture": track("contact_skipped", { stage: "focus" }); next(); break;
+      case "ai-refresh": state.ai = null; track("ai_search_refresh"); renderAI({ force: true }); break;
       case "ai-settings": AI.setConfig(null); state.ai = null; renderAI(); break;
       case "copy-link": {
         const url = shareUrl();
@@ -751,7 +855,7 @@
   }
 
   /* Exposed for tests / debugging. */
-  window.Loadout = { state, FLOW, CONFIG };
+  window.Loadout = { state, FLOW, CONFIG, debug: { finish: finishQuiz, render: renderStep } };
 
   boot();
 })();

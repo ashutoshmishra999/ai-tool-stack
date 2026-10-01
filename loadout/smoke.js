@@ -109,11 +109,27 @@ if (overlap(a, b) === a.size) fail("focus answer has no effect on the stack");
 
 /* AI module: prompt builds offline; parser is tolerant of fenced / noisy JSON; not configured → graceful. */
 const AIM = globalThis.LoadoutAI;
-const prompt = AIM.buildPrompt(recommend(base));
-if (!prompt.includes("10× content") || !prompt.includes("do NOT suggest")) fail("AI prompt missing focus or exclusion list");
-const parsed = AIM.parseJson('Sure! ```json\n{"tools":[{"name":"Jasper","url":"https://jasper.ai","what":"x","why":"y","pricing":"$39","fit":"91"},{"name":"","url":"nope"}],"insight":"go"}\n```');
-if (parsed.tools.length !== 1 || parsed.tools[0].fit !== 91) fail("AI parser failed on fenced JSON");
+const baseRes = recommend(base);
+const earlyEx = globalThis.LoadoutEngine.earlyExclude({ work: base.work, role: base.role, tasks: base.tasks, focus: base.focus });
+if (!earlyEx.length) fail("earlyExclude returned nothing for a partial profile");
+const query = AIM.buildQuery(base);
+console.log(`Search query: ${query}`);
+if (!/marketing/i.test(query) || !/10× content/i.test(query)) fail(`search query missing role or focus: ${query}`);
+const prompt = AIM.buildPrompt({ profile: base, exclude: baseRes.stack.map((x) => x.tool.name) });
+if (!prompt.includes("10× content") || !prompt.includes("DO NOT SUGGEST") || !prompt.includes(baseRes.stack[0].tool.name)) fail("AI prompt missing focus or exclusion list");
+if (!/mainstream/.test(prompt) || !/power-user/.test(prompt) || !/niche/.test(prompt) || !/ESTABLISHED/.test(prompt)) fail("AI prompt missing tier mix / established-company rules");
+const parsed = AIM.parseJson('Sure! ```json\n{"query":"q","tools":[{"name":"Jasper","url":"https://jasper.ai","tier":"Power User","what":"x","why":"y","company":"Jasper · 2021","pricing":"$39","fit":"91"},{"name":"","url":"nope"}],"insight":"go"}\n```');
+if (parsed.tools.length !== 1 || parsed.tools[0].fit !== 91 || parsed.tools[0].tier !== "power-user" || parsed.query !== "q") fail("AI parser failed on fenced JSON / tier normalisation");
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
-AIM.deepSearch(recommend(base)).then((res) => { if (res.ok || res.error !== "not_configured") fail("deepSearch should report not_configured"); });
+if (AIM.startEarly(base, []) !== null) fail("startEarly should be a no-op when not configured");
+AIM.deepSearch({ profile: base, exclude: [] }).then((res) => { if (res.ok || res.error !== "not_configured") fail("deepSearch should report not_configured"); });
+/* Lead + search API handlers parse and reject bad input without network. */
+const mkRes = () => ({ h: {}, setHeader(k, v) { this.h[k] = v; }, status(c) { this.c = c; return this; }, json(o) { this.o = o; return this; }, end() { return this; } });
+const leadFn = require("../api/lead.js"), searchFn = require("../api/search.js");
+(async () => {
+  let r = mkRes(); await leadFn({ method: "POST", headers: {}, body: { email: "bad" } }, r); if (r.c !== 400) fail("lead: invalid email should 400");
+  r = mkRes(); await leadFn({ method: "POST", headers: {}, body: { email: "a@b.co", stage: "focus", profile: { role: "marketing" } } }, r); if (r.c !== 200 || !r.o.ok) fail("lead: valid email should 200 ok");
+  r = mkRes(); await searchFn({ method: "POST", headers: {}, body: { prompt: "x" } }, r); if (r.c !== 503) fail("search: no keys should 503");
+})();
 
 setTimeout(() => { console.log(`\n${TOOLS.length} tools in DB. ${failures ? failures + " FAILURE(S)" : "All checks passed."}`); process.exit(failures ? 1 : 0); }, 20);

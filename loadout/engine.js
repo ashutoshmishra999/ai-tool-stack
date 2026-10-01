@@ -557,5 +557,12 @@
     };
   }
 
-  root.LoadoutEngine = { recommend, buildDemand, CAP_LABELS };
+  /* Names the rule engine would most likely recommend given a PARTIAL profile
+   * (role/work/tasks/focus known, rest defaulted). Used to tell the live web
+   * search what to avoid so it complements the stack instead of repeating it. */
+  function earlyExclude(partial) {
+    try { return recommend(partial).stack.map((x) => x.tool.name); } catch (_) { return []; }
+  }
+
+  root.LoadoutEngine = { recommend, buildDemand, earlyExclude, CAP_LABELS };
 })(typeof window !== "undefined" ? window : globalThis);

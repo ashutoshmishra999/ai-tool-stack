@@ -11,7 +11,9 @@ A zero-dependency, static prototype of the 12-question AI stack assessment, in a
 | `index.html` | Single-page shell: landing → name → 12 questions (+4 fact interstitials) → analyzing → snapshot + partial reveal + email → full result (+ AI deep search) → optional WhatsApp |
 | `styles.css` | Neo-brutalist design system: white paper + `#ff2d2d` red, 3px black borders, hard offset shadows, Archivo Black + Space Grotesk, emoji-first options |
 | `data.js` | The 12 questions + vocabularies (work context, roles, tasks→capability map, **role-dependent focus options** (`FOCUS_BY_ROLE`), goals, use cases, layers, budget tiers) + `FACTS` interstitials. Every option has an `emoji` |
-| `ai.js` | **AI deep search** — one web-grounded LLM call (Gemini `google_search` / Claude `web_search` / your proxy) for 3 extra tools matching the user's focus, excluding what we already recommended |
+| `ai.js` | **AI deep search** — builds the search query from the answers, starts the web-grounded call early (after Q4), returns 6 tiered tools (mainstream / power-user / niche) for the user’s role + focus, ≤ 5 s on the result page |
+| `../api/search.js` | Vercel function: races Gemini + Grok (+ Claude) web search server-side, first valid JSON wins |
+| `../api/lead.js` | Vercel function: validates leads and forwards to `LEAD_WEBHOOK_URL` |
 | `tools.js` | Tool database (58 tools). Each has use-case-level `caps`, per-role `roles`, difficulty, min maturity, pricing, integrations |
 | `engine.js` | Recommendation engine — pure, deterministic, runs in browser and Node |
 | `app.js` | UI state machine, rendering, keyboard nav, lead capture, share links, analytics hooks |
@@ -37,38 +39,46 @@ A zero-dependency, static prototype of the 12-question AI stack assessment, in a
 3. **Q1** How would you describe yourself? (company / own business / freelance / studying / exploring)
 4. **Q2** Role → **⚡ Fact: 40% of working hours can be augmented by AI**
 5. **Q3** Where does your week go? (up to 5)
-6. **Q4** *If AI could crack one thing for you…* — **options depend on the role picked in Q2** (5 per role, 18 roles). Feeds both the engine and the AI deep search.
-7. **Q5** Goals → **🧠 Dynamic fact: "~Nh a week you could claw back"** computed from the tasks they picked, with their goals as tags
-8. **Q6** Use cases · **Q7** Maturity · **Q8** Tools used → **🔭 Fact: 500+ tools** · **Q9** Platforms · **Q10** Tech comfort → **🏆 Fact: 66% productivity lift** · **Q11** Preferences · **Q12** Invest + budget (BUILD MY STACK)
-9. **Analyzing** — ring counts 0→100% with rotating status lines and a card naming the focus being deep-searched.
-10. **Snapshot** — Current AI level (Low/Med/High gauge) + Potential % + headline, then 3 tools revealed / rest locked, then email capture (skippable).
-11. **Result** — profile grid, narrative, ranked stack, **AI deep search block**, layers, workflows, gaps, learning path CTA, share card, WhatsApp capture.
+6. **Q4** *If AI could crack one thing for you…* — **options depend on the role picked in Q2** (5 per role, 18 roles). The moment this is answered the **live web search starts in the background**.
+7. **🔴 Contact capture** — "LIVE SEARCH STARTED · Ashutosh, we're on it." Shows the exact search query being run, then asks *where to send the results + full stack*: email (required) + WhatsApp number (optional). Skippable ("Continue without saving my results"). This is the only ask — it's framed as delivery, not a gate, and it's true: the search really is running.
+8. **Q5** Goals → **🧠 Dynamic fact: "~Nh a week you could claw back"**
+9. **Q6** Use cases · **Q7** Maturity · **Q8** Tools used → **🔭 Fact: 500+ tools** · **Q9** Platforms · **Q10** Tech comfort → **🏆 Fact: 66% productivity lift** · **Q11** Preferences · **Q12** Invest + budget (BUILD MY STACK)
+10. **Analyzing** — ring counts 0→100%; the card says "Live search done/running: {focus}".
+11. **Snapshot** — AI level gauge + Potential % + 3 tools revealed / rest locked. If contact was captured: "Heading to your inbox + WhatsApp → REVEAL MY FULL STACK". Otherwise the old email gate (skippable).
+12. **Result** — profile grid, narrative, ranked stack, **AI deep search block**, layers, workflows, gaps, learning path CTA, share card. WhatsApp ask appears only if no number was given.
 
 Single-select questions auto-advance after 420 ms; Enter continues, Esc goes back, 1–9 picks the nth option.
 
-## AI deep search (`ai.js`)
+## AI deep search (`ai.js` + `../api/search.js`)
 
-The result page runs **one** LLM call. Prompt = work context + role + focus + tasks + goals + use cases + maturity + tech + platforms + prefs + budget + an **exclusion list** of every tool already recommended or owned. The model is told to web-search and return strict JSON: 3 tools (`name,url,what,why,pricing,fit`) + one `insight`; sources from grounding metadata are shown as chips.
+**Goal: personalised, balanced, established, fast (≤ 5 s on the result page).**
 
-Providers (pick in the on-page setup form, or preset via `window.LOADOUT_AI = { provider, key | url, model? }`):
+- **Search query** is built from the answer sequence: `best AI tools {role} {work} for "{focus}" ({top 2 tasks}) {year}` — shown to the user on the capture screen and above the results.
+- **Prompt** asks for exactly **6 tools in a fixed mix**: 2 `mainstream` · 2 `power-user` (practitioners' picks) · 2 `niche` (specialist, "new name" feel). Each needs `what`, a `why` that explicitly references *this* role + focus, `company` (founded year / funding / scale as evidence it's established — 2+ yrs or real backing), `pricing`, `fit`. Tools already recommended by the engine or already used are excluded (prompt + client-side filter). Niche finds are listed first.
+- **Speed**: `startEarly()` fires right after Q4 (role/work/tasks/focus known; `engine.earlyExclude()` predicts what the rule engine will recommend so the search avoids it). The user then answers 8 more questions, so the result almost always renders instantly from the in-flight/cached result. Cold path: `deepSearch()` waits max **5 s** (`RESULT_WAIT_MS`), then shows "taking a little longer — it'll be in your email" and still fills in if/when it lands.
+- **Server** (`api/search.js`): calls every configured provider **in parallel** and returns the **first** one whose text contains valid tools JSON; the rest are aborted. 9 s hard cap. Keys never reach the browser.
 
-| provider | call | notes |
+| env var | provider | call |
 |---|---|---|
-| `gemini` | `generativelanguage.googleapis.com … :generateContent` with `tools:[{google_search:{}}]` | default model `gemini-2.5-flash`; sources from `groundingMetadata.groundingChunks` |
-| `claude` | `api.anthropic.com/v1/messages` with `web_search_20250305` tool | default `claude-sonnet-4-20250514`; needs `anthropic-dangerous-direct-browser-access` (dev only) |
-| `proxy` | `POST {prompt, profile, stackIds}` to your URL | **use this in production** so keys never ship to the browser; return `{text, sources}` or the parsed shape |
+| `GEMINI_API_KEY` | Gemini `gemini-2.5-flash` | `generateContent` + `google_search` grounding |
+| `XAI_API_KEY` | Grok `grok-4.3` (`reasoning.effort: none`) | `POST api.x.ai/v1/responses` + `web_search` tool |
+| `ANTHROPIC_API_KEY` | Claude (optional fallback) | `messages` + `web_search_20250305` |
 
-**Deployed on Vercel, the proxy is automatic.** `../api/search.js` is a serverless function; when the page is served from a real domain (not `file://` / localhost) `ai.js` defaults to `{ provider: "proxy", url: "/api/search" }`. Set `GEMINI_API_KEY` *or* `ANTHROPIC_API_KEY` in Vercel → Project → Settings → Environment Variables and the deep search just works. Optional: `AI_MODEL`, `ALLOWED_ORIGIN`.
+Set **Gemini + Grok** for the fastest race. Optional: `GEMINI_MODEL`, `XAI_MODEL`, `CLAUDE_MODEL`, `SEARCH_TIMEOUT_MS`, `ALLOWED_ORIGIN`.
 
-Key/URL live in `localStorage["loadout.ai"]`; results are cached per profile in `localStorage["loadout.ai.cache"]` ("Search again" forces a refresh). If nothing is configured the block shows a setup form instead of failing; errors render a retry state and never break the rest of the result.
+When served from a real domain `ai.js` auto-uses `{ provider: "proxy", url: "/api/search" }`. On localhost/file:// it shows a dev setup form (direct Gemini/Grok/Claude with a key, or a proxy URL). Override anywhere with `window.LOADOUT_AI = { provider, key | url }`. Results cache per profile in `localStorage["loadout.ai.cache"]` for 7 days.
+
+## Leads (`../api/lead.js`)
+
+When deployed, `CONFIG.LEAD_ENDPOINT` defaults to `/api/lead` (override with `window.LOADOUT_LEAD_ENDPOINT`; `null` on localhost). The client POSTs (via `sendBeacon`, so navigation never waits) `{firstName, email, phone, stage, profile, stackIds, searchQuery, ts}` where `stage` is `focus` (mid-quiz capture), `email` (preview gate) or `phone` (result page). The function validates and forwards to **`LEAD_WEBHOOK_URL`** (Zapier / Make / n8n / Google Apps Script / HubSpot — anything accepting JSON). Unset → it just logs, so the quiz never breaks.
 
 ## Wiring it up
 
 In `app.js` → `CONFIG`:
 
-- `LEAD_ENDPOINT` — set to a URL to `POST {firstName, email, phone, profile, stackIds}`. Leaves `null` → localStorage only.
+- `LEAD_ENDPOINT` — see above. `CAPTURE_AFTER` — which question the contact step follows (default `focus`).
 - `LEARN_CTA_URL` — where "Build my AI skills" goes.
-- `track()` pushes to `window.dataLayer` if present. Events: `landing_viewed`, `landing_cta_clicked`, `quiz_started`, `question_answered`, `fact_viewed`, `quiz_completed`, `result_preview_viewed`, `lead_captured`, `email_skipped`, `result_viewed`, `tool_clicked`, `learn_cta_clicked`, `share_clicked`, `whatsapp_captured`, `shared_result_viewed`, `ai_configured`, `ai_search_started`, `ai_search_completed`, `ai_search_failed`, `ai_tool_clicked`.
+- `track()` pushes to `window.dataLayer` if present. Events: `landing_viewed`, `landing_cta_clicked`, `quiz_started`, `question_answered`, `fact_viewed`, `contact_captured`, `contact_skipped`, `quiz_completed`, `result_preview_viewed`, `lead_captured`, `email_skipped`, `result_viewed`, `tool_clicked`, `learn_cta_clicked`, `share_clicked`, `whatsapp_captured`, `shared_result_viewed`, `ai_configured`, `ai_search_started`, `ai_search_awaited`, `ai_search_completed`, `ai_search_failed`, `ai_search_refresh`, `ai_tool_clicked`.
 
 Share links encode the profile in the URL hash (`#r=…`) so the result reproduces without a backend.
 
