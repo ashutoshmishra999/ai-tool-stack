@@ -58,6 +58,8 @@ Providers (pick in the on-page setup form, or preset via `window.LOADOUT_AI = { 
 | `claude` | `api.anthropic.com/v1/messages` with `web_search_20250305` tool | default `claude-sonnet-4-20250514`; needs `anthropic-dangerous-direct-browser-access` (dev only) |
 | `proxy` | `POST {prompt, profile, stackIds}` to your URL | **use this in production** so keys never ship to the browser; return `{text, sources}` or the parsed shape |
 
+**Deployed on Vercel, the proxy is automatic.** `../api/search.js` is a serverless function; when the page is served from a real domain (not `file://` / localhost) `ai.js` defaults to `{ provider: "proxy", url: "/api/search" }`. Set `GEMINI_API_KEY` *or* `ANTHROPIC_API_KEY` in Vercel → Project → Settings → Environment Variables and the deep search just works. Optional: `AI_MODEL`, `ALLOWED_ORIGIN`.
+
 Key/URL live in `localStorage["loadout.ai"]`; results are cached per profile in `localStorage["loadout.ai.cache"]` ("Search again" forces a refresh). If nothing is configured the block shows a setup form instead of failing; errors render a retry state and never break the rest of the result.
 
 ## Wiring it up

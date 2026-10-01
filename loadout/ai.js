@@ -23,13 +23,28 @@
     claude: "claude-sonnet-4-20250514",
   };
 
+  /* Default proxy: when deployed (not file:// or localhost), use the same-origin
+   * serverless function in /api/search.js so no key ever reaches the browser.
+   * Override with window.LOADOUT_AI = { provider, key|url } or the on-page form. */
+  function defaultProxy() {
+    try {
+      const loc = root.location;
+      if (!loc || loc.protocol === "file:" || /^(localhost|127\.0\.0\.1)$/.test(loc.hostname)) return null;
+      return { provider: "proxy", url: "/api/search", auto: true };
+    } catch (_) { return null; }
+  }
   function getConfig() {
     if (root.LOADOUT_AI && root.LOADOUT_AI.provider) return root.LOADOUT_AI;
-    try { return JSON.parse(root.localStorage.getItem(STORAGE_KEY) || "null") || {}; } catch (_) { return {}; }
+    let stored = null;
+    try { stored = JSON.parse(root.localStorage.getItem(STORAGE_KEY) || "null"); } catch (_) {}
+    if (stored && stored.provider) return stored;
+    if (stored && stored.disabled) return {};
+    return defaultProxy() || {};
   }
   function setConfig(cfg) {
     try {
-      if (!cfg || !cfg.provider) root.localStorage.removeItem(STORAGE_KEY);
+      /* null → "user wants to choose": remember that so the auto-proxy default doesn't re-apply. */
+      if (!cfg || !cfg.provider) root.localStorage.setItem(STORAGE_KEY, JSON.stringify({ disabled: true }));
       else root.localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
     } catch (_) {}
   }
@@ -132,8 +147,8 @@ Respond with ONLY valid JSON (no markdown fences, no prose) in this exact shape:
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, profile: result.profile, stackIds: result.stack.map((x) => x.tool.id) }),
     });
-    if (!res.ok) throw new Error(`Proxy ${res.status}`);
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Proxy ${res.status}`);
     /* Proxy may return either {text, sources} or the parsed shape directly. */
     if (data && Array.isArray(data.tools)) return { text: JSON.stringify(data), sources: data.sources || [] };
     return { text: data.text || "", sources: data.sources || [] };
