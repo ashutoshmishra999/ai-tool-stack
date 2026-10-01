@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Seedance course placeholder</title>
+  <desc id="desc">A clean static course placeholder with abstract video frames.</desc>
+  <rect width="1600" height="1000" fill="#f7f5ef"/>
+  <path d="M0 0h1600v1000H0z" fill="url(#grid)"/>
+  <g transform="translate(176 136)">
+    <rect width="1248" height="728" rx="42" fill="#030303"/>
+    <rect x="110" y="126" width="482" height="300" rx="28" fill="#f7f5ef"/>
+    <path d="M306 218v116l108-58z" fill="#030303"/>
+    <rect x="656" y="126" width="482" height="300" rx="28" fill="#151515" stroke="#f7f5ef" stroke-opacity=".22" stroke-width="4"/>
+    <path d="M852 218v116l108-58z" fill="#e4a72d"/>
+    <rect x="110" y="500" width="1028" height="104" rx="52" fill="#e4a72d"/>
+    <path d="M620-80h96L452 808h-96z" fill="#b7ff5a"/>
+    <path d="M1180-80h96l-264 888h-96z" fill="#245bff"/>
+  </g>
+  <defs>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0v80" fill="none" stroke="#030303" stroke-opacity=".055" stroke-width="2"/>
+    </pattern>
+  </defs>
+</svg>

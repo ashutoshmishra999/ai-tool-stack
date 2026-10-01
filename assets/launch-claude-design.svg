@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Claude Design course placeholder</title>
+  <desc id="desc">A clean static course placeholder with abstract interface shapes.</desc>
+  <rect width="1600" height="1000" fill="#f7f5ef"/>
+  <path d="M0 0h1600v1000H0z" fill="url(#grid)"/>
+  <g transform="translate(176 136)">
+    <rect width="1248" height="728" rx="42" fill="#030303"/>
+    <rect x="112" y="112" width="472" height="504" rx="28" fill="#f7f5ef"/>
+    <rect x="178" y="180" width="232" height="34" rx="17" fill="#030303"/>
+    <rect x="178" y="270" width="314" height="24" rx="12" fill="#706f68"/>
+    <rect x="178" y="332" width="250" height="24" rx="12" fill="#706f68"/>
+    <rect x="178" y="448" width="160" height="64" rx="32" fill="#b7ff5a"/>
+    <rect x="670" y="112" width="466" height="504" rx="28" fill="#151515" stroke="#f7f5ef" stroke-opacity=".22" stroke-width="4"/>
+    <rect x="738" y="188" width="250" height="34" rx="17" fill="#f7f5ef"/>
+    <rect x="738" y="278" width="310" height="24" rx="12" fill="#706f68"/>
+    <rect x="738" y="340" width="210" height="24" rx="12" fill="#706f68"/>
+    <path d="M1070-70h104L910 798H806z" fill="#b7ff5a"/>
+  </g>
+  <defs>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0v80" fill="none" stroke="#030303" stroke-opacity=".055" stroke-width="2"/>
+    </pattern>
+  </defs>
+</svg>

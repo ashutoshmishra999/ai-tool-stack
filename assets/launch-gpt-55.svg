@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">ChatGPT course placeholder</title>
+  <desc id="desc">A clean static course placeholder with abstract image and reasoning panels.</desc>
+  <rect width="1600" height="1000" fill="#030303"/>
+  <g opacity=".12">
+    <path d="M0 160h1600M0 360h1600M0 560h1600M0 760h1600" stroke="#f7f5ef" stroke-width="2"/>
+    <path d="M220 0v1000M420 0v1000M620 0v1000M820 0v1000M1020 0v1000M1220 0v1000M1420 0v1000" stroke="#f7f5ef" stroke-width="2"/>
+  </g>
+  <g transform="translate(176 136)">
+    <rect x="0" y="0" width="1248" height="728" rx="42" fill="#f7f5ef"/>
+    <rect x="92" y="92" width="454" height="544" rx="30" fill="#030303"/>
+    <circle cx="240" cy="276" r="78" fill="#245bff"/>
+    <rect x="340" y="210" width="120" height="36" rx="18" fill="#b7ff5a"/>
+    <rect x="340" y="294" width="110" height="24" rx="12" fill="#706f68"/>
+    <rect x="92" y="424" width="454" height="212" rx="26" fill="#151515"/>
+    <rect x="640" y="92" width="512" height="544" rx="30" fill="#030303"/>
+    <rect x="720" y="174" width="270" height="34" rx="17" fill="#f7f5ef"/>
+    <rect x="720" y="282" width="330" height="24" rx="12" fill="#706f68"/>
+    <rect x="720" y="350" width="250" height="24" rx="12" fill="#706f68"/>
+    <rect x="720" y="500" width="170" height="64" rx="32" fill="#245bff"/>
+  </g>
+</svg>

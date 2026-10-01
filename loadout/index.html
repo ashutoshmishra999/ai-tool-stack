@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Loadout — What's your AI stack?</title>
+    <meta name="description" content="Answer 12 quick questions. Get a personalised AI toolkit, workflows and learning path built around your role, tasks and goals — plus a live AI deep search for your #1 problem." />
+    <meta property="og:title" content="Loadout — What's your AI stack?" />
+    <meta property="og:description" content="12 questions. A personalised AI toolkit built around how you actually work." />
+    <meta name="theme-color" content="#ff2d2d" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <button class="icon-btn" id="top-back" type="button" data-action="back" aria-label="Back" hidden>←</button>
+      <a class="logo" href="#" data-action="restart" aria-label="Loadout home">LOADOUT</a>
+      <span class="step-count" id="step-count" hidden>1 / 12</span>
+      <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
+    </header>
+
+    <main id="app">
+      <!-- ───────────── LANDING ───────────── -->
+      <section class="screen is-active" id="screen-landing" data-screen="landing">
+        <div class="hero">
+          <div class="sticker sticker-a" aria-hidden="true">⚡ 2 MIN</div>
+          <div class="sticker sticker-b" aria-hidden="true">🆓 FREE</div>
+          <p class="eyebrow">AI STACK BUILDER</p>
+          <h1 class="display">WHAT'S YOUR<br /><span class="red">AI STACK?</span></h1>
+          <p class="lede">12 quick questions. A personalised AI toolkit, 3 workflows to build and a learning path — all shaped by your role, your week and what you already use.</p>
+          <button class="btn btn-primary btn-xl" type="button" data-action="start">LET'S GO <span aria-hidden="true">→</span></button>
+          <div class="hero-proof" aria-label="Example stacks">
+            <div class="proof-card"><span class="proof-emoji">📣</span><span class="proof-role">Marketing</span><strong>Gemini · Canva · Make · Perplexity</strong></div>
+            <div class="proof-card"><span class="proof-emoji">💻</span><span class="proof-role">Engineering</span><strong>Claude · Cursor · n8n · v0</strong></div>
+            <div class="proof-card"><span class="proof-emoji">🎓</span><span class="proof-role">Student</span><strong>NotebookLM · Perplexity · Gamma</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ───────────── NAME ───────────── -->
+      <section class="screen" id="screen-name" data-screen="name">
+        <form class="card-form" id="name-form" novalidate>
+          <span class="big-emoji" aria-hidden="true">👋</span>
+          <h2 class="h-xl">First, what should we call you?</h2>
+          <p class="hint">So your stack feels like yours.</p>
+          <label class="field">
+            <span class="sr-only">Your first name</span>
+            <input id="first-name" name="firstName" type="text" autocomplete="given-name" placeholder="Your first name" maxlength="40" required />
+          </label>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-lg" type="submit">CONTINUE <span aria-hidden="true">→</span></button>
+            <button class="btn btn-ghost" type="button" data-action="skip-name">Skip</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- ───────────── QUIZ ───────────── -->
+      <section class="screen" id="screen-quiz" data-screen="quiz">
+        <div class="quiz">
+          <div class="quiz-head">
+            <h2 class="h-xl" id="q-title"></h2>
+            <p class="hint" id="q-hint"></p>
+          </div>
+          <div class="options" id="q-options" role="group" aria-labelledby="q-title"></div>
+        </div>
+      </section>
+
+      <!-- ───────────── FACT INTERSTITIAL ───────────── -->
+      <section class="screen" id="screen-fact" data-screen="fact">
+        <div class="fact" id="fact-root"></div>
+      </section>
+
+      <!-- ───────────── ANALYZING ───────────── -->
+      <section class="screen" id="screen-analyzing" data-screen="analyzing">
+        <div class="analyzing">
+          <div class="ring" aria-hidden="true">
+            <svg viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="52" /><circle class="ring-fg" id="ring-fg" cx="60" cy="60" r="52" /></svg>
+            <span class="ring-pct" id="ring-pct">0%</span>
+          </div>
+          <h2 class="h-lg" id="analyzing-title">Building your stack…</h2>
+          <p class="analyzing-status" id="analyzing-status">Analysing your role</p>
+          <div class="fact-card fact-card-sm" id="analyzing-fact"></div>
+        </div>
+      </section>
+
+      <!-- ───────────── PREVIEW + EMAIL ───────────── -->
+      <section class="screen" id="screen-preview" data-screen="preview">
+        <div class="preview" id="preview-root"></div>
+      </section>
+
+      <!-- ───────────── RESULT ───────────── -->
+      <section class="screen" id="screen-result" data-screen="result">
+        <div class="result" id="result-root"></div>
+      </section>
+    </main>
+
+    <!-- Sticky bottom bar (quiz / fact) -->
+    <div class="bottombar" id="bottombar" hidden>
+      <span class="kbd-hint">Press <kbd>Enter</kbd> ↵</span>
+      <button class="btn btn-primary btn-lg" type="button" id="q-continue" data-action="next" disabled>CONTINUE</button>
+    </div>
+
+    <footer class="footer">
+      <span>LOADOUT</span>
+      <span>Recommendations are generated from your answers, not sponsored. Tool pricing is approximate.</span>
+    </footer>
+
+    <script src="data.js"></script>
+    <script src="tools.js"></script>
+    <script src="engine.js"></script>
+    <script src="ai.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
